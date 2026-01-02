@@ -4,3 +4,4 @@ google-genai
 scikit-learn
 numpy
 st-gsheets-connection
+google-auth-oauthlib

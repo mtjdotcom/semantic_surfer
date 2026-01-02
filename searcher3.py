@@ -8,9 +8,87 @@ from google.genai import types
 from sklearn.metrics.pairwise import cosine_similarity
 from streamlit_gsheets import GSheetsConnection
 import time
+from google_auth_oauthlib.flow import Flow
+import requests
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Semantic Surfer", layout="wide")
+
+# --- AUTHENTICATION LOGIC (THE GATEKEEPER) ---
+def check_authentication():
+    # 1. If already authenticated in this session, pass
+    if st.session_state.get("auth_status") == "authenticated":
+        return True
+
+    # 2. Setup Google OAuth Flow
+    try:
+        client_config = {
+            "web": {
+                "client_id": st.secrets["oauth"]["client_id"],
+                "client_secret": st.secrets["oauth"]["client_secret"],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [st.secrets["oauth"]["redirect_uri"]],
+            }
+        }
+        
+        # Determine current URL to check for redirection code
+        # (Streamlit Cloud handles params differently than local)
+        auth_code = st.query_params.get("code")
+
+        flow = Flow.from_client_config(
+            client_config,
+            scopes=["https://www.googleapis.com/auth/userinfo.email", "openid"],
+            redirect_uri=st.secrets["oauth"]["redirect_uri"],
+        )
+
+        # 3. Handle the Return Trip (Exchange Code for Token)
+        if auth_code:
+            flow.fetch_token(code=auth_code)
+            credentials = flow.credentials
+            
+            # Get User Email
+            user_info = requests.get(
+                "https://www.googleapis.com/oauth2/v1/userinfo", 
+                headers={"Authorization": f"Bearer {credentials.token}"}
+            ).json()
+            
+            email = user_info.get("email", "")
+            
+            # 4. THE DOMAIN CHECK
+            if email.endswith("@isomercapital.com"):
+                st.session_state["auth_status"] = "authenticated"
+                st.session_state["user_email"] = email
+                # Clear the code from URL so refreshing doesn't crash
+                st.query_params.clear() 
+                st.rerun()
+            else:
+                st.error(f"Access Denied. {email} is not an Isomer Capital account.")
+                st.session_state["auth_status"] = "failed"
+                return False
+
+    except Exception as e:
+        st.error(f"Authentication Error: {e}")
+        return False
+
+    # 5. Show Login Button (If not logged in)
+    auth_url, _ = flow.authorization_url(prompt="consent")
+    
+    st.title("🔒 Semantic Surfer Access")
+    st.markdown("Please sign in with your **Isomer Capital** Google account.")
+    
+    st.link_button("Sign in with Google", auth_url, type="primary")
+    st.stop() # HALT APP EXECUTION HERE
+
+# --- RUN THE CHECK IMMEDIATELY ---
+# If this fails or stops, the rest of the code below won't run.
+check_authentication()
+
+# Display the logged-in user (Optional nice touch)
+st.sidebar.caption(f"Logged in as: {st.session_state.get('user_email')}")
+if st.sidebar.button("Logout"):
+    st.session_state["auth_status"] = None
+    st.rerun()
 
 if "GOOGLE_API_KEY" in st.secrets:
     client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
