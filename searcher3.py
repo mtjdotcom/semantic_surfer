@@ -107,17 +107,50 @@ def save_to_cache(company_name, research_text, query_vector):
     except Exception as e:
         st.warning(f"Could not save to cache: {e}")
 
-def check_semantic_cache(new_query_vector, cache_df, cache_vectors, threshold=0.92):
-    """Checks if we have researched this company before."""
-    if cache_vectors.size == 0:
+# def check_semantic_cache(new_query_vector, cache_df, cache_vectors, threshold=0.92):
+#     """Checks if we have researched this company before."""
+#     if cache_vectors.size == 0:
+#         return None
+        
+#     # Calculate similarity between NEW query and PAST queries
+#     scores = cosine_similarity(new_query_vector, cache_vectors)[0]
+#     best_idx = np.argmax(scores)
+    
+#     if scores[best_idx] > threshold:
+#         return cache_df.iloc[best_idx]['Research']
+        
+#     return None
+
+def check_semantic_cache(new_query_name, new_query_vector, cache_df, cache_vectors, threshold=0.92):
+    """Checks cache for exact name match FIRST, then falls back to vector similarity."""
+    
+    # 1. Handle empty cache immediately
+    if cache_df.empty:
         return None
         
-    # Calculate similarity between NEW query and PAST queries
-    scores = cosine_similarity(new_query_vector, cache_vectors)[0]
-    best_idx = np.argmax(scores)
+    # --- CHECK 1: EXACT NAME MATCH (Fast & 100% Accurate) ---
+    # This prevents duplicates like "Ark Robotics" vs "Ark Robotics "
+    clean_query = str(new_query_name).lower().strip()
     
-    if scores[best_idx] > threshold:
-        return cache_df.iloc[best_idx]['Research']
+    if 'Company Name' in cache_df.columns:
+        # Check if any existing row matches our query
+        matches = cache_df[cache_df['Company Name'].str.lower().str.strip() == clean_query]
+        if not matches.empty:
+            # Return the research from the most recent entry
+            return matches.iloc[-1]['Research']
+
+    # --- CHECK 2: SEMANTIC VECTOR MATCH (Fuzzy Backup) ---
+    # If the name was spelled differently, use vectors
+    if cache_vectors.size > 0:
+        # We must validate that new_query_vector is actually an array, not a string
+        if isinstance(new_query_vector, (str, type(None))):
+            return None
+            
+        scores = cosine_similarity(new_query_vector, cache_vectors)[0]
+        best_idx = np.argmax(scores)
+        
+        if scores[best_idx] > threshold:
+            return cache_df.iloc[best_idx]['Research']
         
     return None
 
@@ -217,93 +250,6 @@ def analyze_deal(company_name, company_url, portfolio_df, portfolio_vectors, pre
         "error": None
     }
 
-# def display_match_cards(results):
-#     """Helper to display the Top 3 matches consistently across tabs."""
-#     if not results.get('Matches'):
-#         st.warning("No matches found.")
-#         return
-
-#     st.markdown("### 🎯 Top 3 Portfolio Matches")
-    
-#     medals = ["🥇", "🥈", "🥉"]
-    
-#     for i, match in enumerate(results['Matches']):
-#         with st.container(border=True):
-#             st.subheader(f"{medals[i]} {match['Company']}")
-            
-#             # Row 1: Metrics
-#             c1, c2, c3 = st.columns(3)
-#             with c1:
-#                 st.metric("Similarity", f"{match['Similarity']*100:.1f}%")
-#             with c2:
-#                 st.metric("Status", match['Status'])
-#             with c3:
-#                 st.metric("Multiple", match['Multiple'])
-            
-#             st.divider()
-            
-#             # Row 2: Attribution
-#             c4, c5 = st.columns(2)
-#             with c4:
-#                 st.metric("Partner VC", match['Partner'])
-#             with c5:
-#                 st.metric("Isomer Fund", match['Fund'])
-
-# def display_match_cards(results):
-#     """Helper to display the Top 3 matches consistently across tabs."""
-#     if not results.get('Matches'):
-#         st.warning("No matches found.")
-#         return
-
-#     st.markdown("### 🎯 Top 3 Portfolio Matches")
-    
-#     medals = ["🥇", "🥈", "🥉"]
-    
-#     for i, match in enumerate(results['Matches']):
-#         with st.container(border=True):
-            
-#             # --- START OF NEW CODE ---
-#             # Header Row: We split this into 2 columns (Name on left, Link on right)
-#             col_head_1, col_head_2 = st.columns([3, 1])
-            
-#             with col_head_1:
-#                 # 1. The Company Name
-#                 st.subheader(f"{medals[i]} {match['Company']}")
-            
-#             with col_head_2:
-#                 # 2. The Website Link (The part that was missing)
-#                 url = match.get('Website')
-                
-#                 # Check if we actually have a website string
-#                 if url and isinstance(url, str) and len(url.strip()) > 0:
-#                     # Clean up the URL (add https if missing)
-#                     clean_url = url.strip()
-#                     if not clean_url.startswith('http'):
-#                         clean_url = f"https://{clean_url}"
-                    
-#                     # Display the link
-#                     st.markdown(f"[🌐 Visit Site]({clean_url})")
-#                 else:
-#                     st.caption("No website")
-#             # --- END OF NEW CODE ---
-
-#             # Row 1: Metrics (This is what you saw in your screenshot)
-#             c1, c2, c3 = st.columns(3)
-#             with c1:
-#                 st.metric("Similarity", f"{match['Similarity']*100:.1f}%")
-#             with c2:
-#                 st.metric("Status", match['Status'])
-#             with c3:
-#                 st.metric("Multiple", match['Multiple'])
-            
-#             st.divider()
-            
-#             # Row 2: Attribution
-#             c4, c5 = st.columns(2)
-#             with c4:
-#                 st.metric("Partner VC", match['Partner'])
-#             with c5:
-#                 st.metric("Isomer Fund", match['Fund'])
 
 def display_match_cards(results):
     """Helper to display the Top 3 matches consistently across tabs."""
@@ -413,7 +359,7 @@ with tab_single:
 
                 # --- STEP 2: CHECK CACHE ---
                 # Check if we have researched this company before
-                cached_research = check_semantic_cache(query_vector, df_cache, cache_vectors)
+                cached_research = check_semantic_cache(s_company, query_vector, df_cache, cache_vectors)
                 
                 from_cache = False
                 research_text = None
@@ -479,79 +425,223 @@ with tab_custom:
                 else:
                     st.success("Search Complete")
                     display_match_cards(res)
+
+# --- TAB 3: BULK UPLOAD ---
+# with tab_bulk:
+#     st.header("📂 Bulk Analysis")
+#     st.caption("Upload a CSV with columns: 'Company Name' and 'URL'.")
+    
+#     uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+    
+#     if uploaded_file:
+#         df_upload = pd.read_csv(uploaded_file)
+        
+#         # Clean column names
+#         df_upload.columns = df_upload.columns.str.strip()
+        
+#         if "Company Name" in df_upload.columns and "URL" in df_upload.columns:
+            
+#             if st.button("Run Bulk Analysis", type="primary"):
+#                 results = []
+#                 progress_bar = st.progress(0)
+                
+#                 # Iterate through the uploaded companies
+#                 for i, row in df_upload.iterrows():
+#                     company_input = row['Company Name']
+#                     url_input = row['URL']
                     
-                    # We don't need to show 'Research Summary' since the user wrote it!
+#                     # 1. Run Analysis
+#                     res = analyze_deal(company_input, url_input, df_portfolio, portfolio_vectors)
+                    
+#                     if res.get('error'):
+#                         results.append({
+#                             "Uploaded Name": company_input,
+#                             "Match Status": "Error",
+#                             "Error Details": res['error']
+#                         })
+#                     else:
+#                         # 2. Extract ONLY the #1 Best Match
+#                         best_match = res['Matches'][0] if res['Matches'] else {}
+                        
+#                         raw_url = best_match.get('Website', '')
+#                         clean_url = ""
+#                         if raw_url and isinstance(raw_url, str) and len(raw_url.strip()) > 0:
+#                             clean_url = raw_url.strip()
+#                             if not clean_url.startswith('http'):
+#                                 clean_url = f"https://{clean_url}"
+
+#                         # 3. Build the Clean Data Row (Metrics Only)
+#                         results.append({
+#                             "Uploaded Name": company_input,           # Who you searched for
+#                             "Top Match": best_match.get('Company', 'None'), # Who we found
+#                             "Website": clean_url, # Portfolio website
+#                             "Similarity": best_match.get('Similarity', 0.0),
+#                             "Status": best_match.get('Status', '-'),
+#                             "Multiple": best_match.get('Multiple', '-'),
+#                             "Partner VC": best_match.get('Partner', '-'),
+#                             "Isomer Fund": best_match.get('Fund', '-')
+#                         })
+                    
+#                     # Update progress bar
+#                     progress_bar.progress((i + 1) / len(df_upload))
+                
+#                 # 4. Display Results
+#                 st.success("Bulk Analysis Complete!")
+                
+#                 # Create DataFrame
+#                 result_df = pd.DataFrame(results)
+                
+#                 # Format Similarity as Percentage (just for display)
+#                 display_df = result_df.copy()
+#                 if "Similarity" in display_df.columns:
+#                     display_df['Similarity'] = display_df['Similarity'].apply(lambda x: f"{x*100:.1f}%" if isinstance(x, (int, float)) else x)
+                
+#                 # Show the Table
+#                 st.dataframe(
+#                     display_df,
+#                     column_config={
+#                         "Website": st.column_config.LinkColumn("Website"), # Make URL clickable
+#                     },
+#                     use_container_width=True
+#                 )
+                
+#                 # Download Button
+#                 csv = result_df.to_csv(index=False).encode('utf-8')
+#                 st.download_button(
+#                     label="Download Results CSV",
+#                     data=csv,
+#                     file_name="isomer_bulk_results.csv",
+#                     mime="text/csv",
+#                     type="primary"
+#                 )
+#         else:
+#             st.error("CSV Error: Your file must have columns named exactly 'Company Name' and 'URL'.")
+#             st.write("Found columns:", list(df_upload.columns))
 
 # --- TAB 3: BULK UPLOAD ---
 with tab_bulk:
     st.header("📂 Bulk Analysis")
-    st.caption("Upload a CSV with columns: 'Company Name' and 'URL'")
+    st.caption("Upload a CSV with columns: 'Company Name' and 'URL'.")
     
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
     
     if uploaded_file:
         df_upload = pd.read_csv(uploaded_file)
         
-        # Check if the required columns exist (flexible check)
-        # We strip whitespace to handle accidental spaces like "Company Name "
+        # Clean column names
         df_upload.columns = df_upload.columns.str.strip()
         
         if "Company Name" in df_upload.columns and "URL" in df_upload.columns:
             
-            if st.button("Run Bulk Analysis"):
+            if st.button("Run Bulk Analysis", type="primary"):
                 results = []
                 progress_bar = st.progress(0)
                 
                 # Iterate through the uploaded companies
                 for i, row in df_upload.iterrows():
-                    company = row['Company Name']
-                    url = row['URL']
+                    company_input = row['Company Name']
+                    url_input = row['URL']
                     
-                    # 1. Run Analysis (Now passing the URL correctly!)
-                    res = analyze_deal(company, url, df_portfolio, portfolio_vectors)
+                    # --- NEW: CACHE LOGIC START ---
                     
+                    # 1. Embed the Company Name (Needed for Cache Check)
+                    query_vector = None
+                    try:
+                        q_resp = client.models.embed_content(
+                            model='text-embedding-004',
+                            contents=company_input,
+                            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
+                        )
+                        query_vector = np.array(q_resp.embeddings[0].values).reshape(1, -1)
+                    except Exception:
+                        # If embedding fails, we just proceed without cache
+                        pass
+
+                    # 2. Check Cache (Did we research this before?)
+                    cached_research = None
+                    if query_vector is not None:
+                        # Uses the exact match logic we just fixed
+                        cached_research = check_semantic_cache(company_input, query_vector, df_cache, cache_vectors)
+                    
+                    # --- CACHE LOGIC END ---
+
+                    # 3. Run Analysis
+                    # We pass 'cached_research' so the function knows whether to skip Gemini
+                    res = analyze_deal(
+                        company_name=company_input, 
+                        company_url=url_input, 
+                        portfolio_df=df_portfolio, 
+                        portfolio_vectors=portfolio_vectors,
+                        precomputed_research=cached_research 
+                    )
+                    
+                    # 4. Save to Cache (If it was new and successful)
+                    if not cached_research and not res.get('error') and query_vector is not None:
+                        save_to_cache(company_input, res['Research'], query_vector)
+                    
+                    # 5. Handle Errors & Results
                     if res.get('error'):
                         results.append({
-                            "Company Name": company,
-                            "Top Match": "Error",
-                            "Similarity": 0.0,
-                            "Research": res['error']
+                            "Uploaded Name": company_input,
+                            "Match Status": "Error",
+                            "Error Details": res['error']
                         })
                     else:
-                        # 2. Extract the #1 Best Match from the list
+                        # Extract ONLY the #1 Best Match
                         best_match = res['Matches'][0] if res['Matches'] else {}
                         
+                        # Clean the URL (Force https://)
+                        raw_url = best_match.get('Website', '')
+                        clean_url = ""
+                        if raw_url and isinstance(raw_url, str) and len(raw_url.strip()) > 0:
+                            clean_url = raw_url.strip()
+                            if not clean_url.startswith('http'):
+                                clean_url = f"https://{clean_url}"
+
+                        # Build the Clean Data Row
                         results.append({
-                            "Company Name": company,
-                            "Top Match": best_match.get('Company', 'None'),
+                            "Uploaded Name": company_input,           
+                            "Top Match": best_match.get('Company', 'None'), 
+                            "Website": clean_url, 
                             "Similarity": best_match.get('Similarity', 0.0),
-                            "Research": res['Research']
+                            "Status": best_match.get('Status', '-'),
+                            "Multiple": best_match.get('Multiple', '-'),
+                            "Partner VC": best_match.get('Partner', '-'),
+                            "Isomer Fund": best_match.get('Fund', '-')
                         })
                     
                     # Update progress bar
                     progress_bar.progress((i + 1) / len(df_upload))
                 
-                # 3. Display Results
+                # 6. Display Results
                 st.success("Bulk Analysis Complete!")
                 
-                # Create a clean DataFrame for display
+                # Create DataFrame
                 result_df = pd.DataFrame(results)
                 
-                # Format the similarity score as a percentage for display
+                # Format Similarity
                 display_df = result_df.copy()
-                display_df['Similarity'] = display_df['Similarity'].apply(lambda x: f"{x*100:.1f}%")
+                if "Similarity" in display_df.columns:
+                    display_df['Similarity'] = display_df['Similarity'].apply(lambda x: f"{x*100:.1f}%" if isinstance(x, (int, float)) else x)
                 
-                # Show the table
-                st.dataframe(display_df)
+                # Show the Table
+                st.dataframe(
+                    display_df,
+                    column_config={
+                        "Website": st.column_config.LinkColumn("Website"),
+                    },
+                    width="stretch"
+                )
                 
                 # Download Button
                 csv = result_df.to_csv(index=False).encode('utf-8')
                 st.download_button(
-                    label="Download Bulk Results",
+                    label="Download Results CSV",
                     data=csv,
                     file_name="isomer_bulk_results.csv",
-                    mime="text/csv"
+                    mime="text/csv",
+                    type="primary"
                 )
         else:
             st.error("CSV Error: Your file must have columns named exactly 'Company Name' and 'URL'.")
-            st.write("Found columns:", list(df_upload.columns))
+            st.write("Found columns:", list(df_upload.columns))                        
