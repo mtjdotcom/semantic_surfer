@@ -1,0 +1,6 @@
+streamlit
+pandas
+google-genai
+scikit-learn
+numpy
+st-gsheets-connection

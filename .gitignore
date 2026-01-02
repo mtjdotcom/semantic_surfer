@@ -1,0 +1,15 @@
+# --- Security (NEVER COMMIT THESE) ---
+.streamlit/secrets.toml
+.env
+
+# --- Virtual Environment ---
+env/
+venv/
+.venv/
+
+# --- Python Junk ---
+__pycache__/
+*.pyc
+
+# --- Mac System Files ---
+.DS_Store

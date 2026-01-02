@@ -1,0 +1,7 @@
+[theme]
+base = "light"
+primaryColor = "#0B163D"        # Isomer Navy Blue
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F5F5F5" 
+textColor = "#0A163C"           
+font = "sans serif"
