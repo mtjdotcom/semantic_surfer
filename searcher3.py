@@ -518,6 +518,134 @@ with tab_custom:
 #             st.error("CSV Error: Your file must have columns named exactly 'Company Name' and 'URL'.")
 #             st.write("Found columns:", list(df_upload.columns))
 
+# # --- TAB 3: BULK UPLOAD ---
+# with tab_bulk:
+#     st.header("📂 Bulk Analysis")
+#     st.caption("Upload a CSV with columns: 'Company Name' and 'URL'.")
+    
+#     uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+    
+#     if uploaded_file:
+#         df_upload = pd.read_csv(uploaded_file)
+        
+#         # Clean column names
+#         df_upload.columns = df_upload.columns.str.strip()
+        
+#         if "Company Name" in df_upload.columns and "URL" in df_upload.columns:
+            
+#             if st.button("Run Bulk Analysis", type="primary"):
+#                 results = []
+#                 progress_bar = st.progress(0)
+                
+#                 # Iterate through the uploaded companies
+#                 for i, row in df_upload.iterrows():
+#                     company_input = row['Company Name']
+#                     url_input = row['URL']
+                    
+#                     # --- NEW: CACHE LOGIC START ---
+                    
+#                     # 1. Embed the Company Name (Needed for Cache Check)
+#                     query_vector = None
+#                     try:
+#                         q_resp = client.models.embed_content(
+#                             model='text-embedding-004',
+#                             contents=company_input,
+#                             config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
+#                         )
+#                         query_vector = np.array(q_resp.embeddings[0].values).reshape(1, -1)
+#                     except Exception:
+#                         # If embedding fails, we just proceed without cache
+#                         pass
+
+#                     # 2. Check Cache (Did we research this before?)
+#                     cached_research = None
+#                     if query_vector is not None:
+#                         # Uses the exact match logic we just fixed
+#                         cached_research = check_semantic_cache(company_input, query_vector, df_cache, cache_vectors)
+                    
+#                     # --- CACHE LOGIC END ---
+
+#                     # 3. Run Analysis
+#                     # We pass 'cached_research' so the function knows whether to skip Gemini
+#                     res = analyze_deal(
+#                         company_name=company_input, 
+#                         company_url=url_input, 
+#                         portfolio_df=df_portfolio, 
+#                         portfolio_vectors=portfolio_vectors,
+#                         precomputed_research=cached_research 
+#                     )
+                    
+#                     # 4. Save to Cache (If it was new and successful)
+#                     if not cached_research and not res.get('error') and query_vector is not None:
+#                         save_to_cache(company_input, res['Research'], query_vector)
+                    
+#                     # 5. Handle Errors & Results
+#                     if res.get('error'):
+#                         results.append({
+#                             "Uploaded Name": company_input,
+#                             "Match Status": "Error",
+#                             "Error Details": res['error']
+#                         })
+#                     else:
+#                         # Extract ONLY the #1 Best Match
+#                         best_match = res['Matches'][0] if res['Matches'] else {}
+                        
+#                         # Clean the URL (Force https://)
+#                         raw_url = best_match.get('Website', '')
+#                         clean_url = ""
+#                         if raw_url and isinstance(raw_url, str) and len(raw_url.strip()) > 0:
+#                             clean_url = raw_url.strip()
+#                             if not clean_url.startswith('http'):
+#                                 clean_url = f"https://{clean_url}"
+
+#                         # Build the Clean Data Row
+#                         results.append({
+#                             "Uploaded Name": company_input,           
+#                             "Top Match": best_match.get('Company', 'None'), 
+#                             "Website": clean_url, 
+#                             "Similarity": best_match.get('Similarity', 0.0),
+#                             "Status": best_match.get('Status', '-'),
+#                             "Multiple": best_match.get('Multiple', '-'),
+#                             "Partner VC": best_match.get('Partner', '-'),
+#                             "Isomer Fund": best_match.get('Fund', '-')
+#                         })
+                    
+#                     # Update progress bar
+#                     progress_bar.progress((i + 1) / len(df_upload))
+                
+#                 # 6. Display Results
+#                 st.success("Bulk Analysis Complete!")
+                
+#                 # Create DataFrame
+#                 result_df = pd.DataFrame(results)
+                
+#                 # Format Similarity
+#                 display_df = result_df.copy()
+#                 if "Similarity" in display_df.columns:
+#                     display_df['Similarity'] = display_df['Similarity'].apply(lambda x: f"{x*100:.1f}%" if isinstance(x, (int, float)) else x)
+                
+#                 # Show the Table
+#                 st.dataframe(
+#                     display_df,
+#                     column_config={
+#                         "Website": st.column_config.LinkColumn("Website"),
+#                     },
+#                     width="stretch"
+#                 )
+                
+#                 # Download Button
+#                 csv = result_df.to_csv(index=False).encode('utf-8')
+#                 st.download_button(
+#                     label="Download Results CSV",
+#                     data=csv,
+#                     file_name="isomer_bulk_results.csv",
+#                     mime="text/csv",
+#                     type="primary"
+#                 )
+#         else:
+#             st.error("CSV Error: Your file must have columns named exactly 'Company Name' and 'URL'.")
+#             st.write("Found columns:", list(df_upload.columns))
+
 # --- TAB 3: BULK UPLOAD ---
 with tab_bulk:
     st.header("📂 Bulk Analysis")
@@ -537,14 +665,26 @@ with tab_bulk:
                 results = []
                 progress_bar = st.progress(0)
                 
+                # --- NEW: SESSION MEMORY ---
+                # Create a set of names we ALREADY know from the loaded cache
+                # We normalize them (lowercase, stripped) to ensure matching works
+                if not df_cache.empty and 'Company Name' in df_cache.columns:
+                    session_known_names = set(df_cache['Company Name'].str.lower().str.strip().tolist())
+                else:
+                    session_known_names = set()
+                # ---------------------------
+
                 # Iterate through the uploaded companies
                 for i, row in df_upload.iterrows():
                     company_input = row['Company Name']
                     url_input = row['URL']
                     
-                    # --- NEW: CACHE LOGIC START ---
+                    # Normalize input name for checking
+                    clean_input_name = str(company_input).lower().strip()
                     
-                    # 1. Embed the Company Name (Needed for Cache Check)
+                    # --- CACHE LOGIC START ---
+                    
+                    # 1. Embed the Company Name (Needed for Vector Check)
                     query_vector = None
                     try:
                         q_resp = client.models.embed_content(
@@ -554,19 +694,35 @@ with tab_bulk:
                         )
                         query_vector = np.array(q_resp.embeddings[0].values).reshape(1, -1)
                     except Exception:
-                        # If embedding fails, we just proceed without cache
                         pass
 
                     # 2. Check Cache (Did we research this before?)
                     cached_research = None
-                    if query_vector is not None:
-                        # Uses the exact match logic we just fixed
-                        cached_research = check_semantic_cache(company_input, query_vector, df_cache, cache_vectors)
+                    
+                    # FAST CHECK: Have we seen this name in this session or the loaded cache?
+                    if clean_input_name in session_known_names:
+                        # If we know the name, we try to grab the research from the existing dataframe
+                        # (Note: If it was added *just now* in the loop, we might not have the text handy, 
+                        # so we might still skip the save but might need to re-run analysis if we didn't store the text.
+                        # For simplicity, if it's a duplicate name, we assume we don't need to re-save it.)
+                        
+                        # Use the function to get the actual text if available
+                        if query_vector is not None:
+                            cached_research = check_semantic_cache(company_input, query_vector, df_cache, cache_vectors)
+                            
+                        # If check_semantic_cache returned None (because the dataframe is stale),
+                        # but 'clean_input_name' IS in 'session_known_names', it means we processed it 
+                        # moments ago. We treat this as a "Soft Hit" - we won't save it again.
+                        already_processed_in_session = True
+                    else:
+                        # Regular check for old data
+                        if query_vector is not None:
+                            cached_research = check_semantic_cache(company_input, query_vector, df_cache, cache_vectors)
+                        already_processed_in_session = False
                     
                     # --- CACHE LOGIC END ---
 
                     # 3. Run Analysis
-                    # We pass 'cached_research' so the function knows whether to skip Gemini
                     res = analyze_deal(
                         company_name=company_input, 
                         company_url=url_input, 
@@ -575,9 +731,13 @@ with tab_bulk:
                         precomputed_research=cached_research 
                     )
                     
-                    # 4. Save to Cache (If it was new and successful)
+                    # 4. Save to Cache (ONLY if it's new AND we haven't processed it this session)
                     if not cached_research and not res.get('error') and query_vector is not None:
-                        save_to_cache(company_input, res['Research'], query_vector)
+                        if not already_processed_in_session:
+                            save_to_cache(company_input, res['Research'], query_vector)
+                            
+                            # CRITICAL: Add to session memory so next loop iteration knows!
+                            session_known_names.add(clean_input_name)
                     
                     # 5. Handle Errors & Results
                     if res.get('error'):
@@ -587,10 +747,9 @@ with tab_bulk:
                             "Error Details": res['error']
                         })
                     else:
-                        # Extract ONLY the #1 Best Match
                         best_match = res['Matches'][0] if res['Matches'] else {}
                         
-                        # Clean the URL (Force https://)
+                        # Clean the URL
                         raw_url = best_match.get('Website', '')
                         clean_url = ""
                         if raw_url and isinstance(raw_url, str) and len(raw_url.strip()) > 0:
@@ -598,7 +757,6 @@ with tab_bulk:
                             if not clean_url.startswith('http'):
                                 clean_url = f"https://{clean_url}"
 
-                        # Build the Clean Data Row
                         results.append({
                             "Uploaded Name": company_input,           
                             "Top Match": best_match.get('Company', 'None'), 
@@ -610,21 +768,17 @@ with tab_bulk:
                             "Isomer Fund": best_match.get('Fund', '-')
                         })
                     
-                    # Update progress bar
                     progress_bar.progress((i + 1) / len(df_upload))
                 
                 # 6. Display Results
                 st.success("Bulk Analysis Complete!")
                 
-                # Create DataFrame
                 result_df = pd.DataFrame(results)
                 
-                # Format Similarity
                 display_df = result_df.copy()
                 if "Similarity" in display_df.columns:
                     display_df['Similarity'] = display_df['Similarity'].apply(lambda x: f"{x*100:.1f}%" if isinstance(x, (int, float)) else x)
                 
-                # Show the Table
                 st.dataframe(
                     display_df,
                     column_config={
@@ -633,7 +787,6 @@ with tab_bulk:
                     width="stretch"
                 )
                 
-                # Download Button
                 csv = result_df.to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="Download Results CSV",
