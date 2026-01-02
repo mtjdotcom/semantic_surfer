@@ -206,6 +206,7 @@ def analyze_deal(company_name, company_url, portfolio_df, portfolio_vectors, pre
             "Multiple": row.get('Multiple', '-'),
             "Partner": row.get('Partner VC - CList', 'N/A'),
             "Fund": row.get('Isomer Fund', 'N/A'),
+            "Website": row.get('Website', ''),
             "Description": row.get('Description', '')
         })
 
@@ -215,6 +216,94 @@ def analyze_deal(company_name, company_url, portfolio_df, portfolio_vectors, pre
         "Matches": matches,
         "error": None
     }
+
+# def display_match_cards(results):
+#     """Helper to display the Top 3 matches consistently across tabs."""
+#     if not results.get('Matches'):
+#         st.warning("No matches found.")
+#         return
+
+#     st.markdown("### 🎯 Top 3 Portfolio Matches")
+    
+#     medals = ["🥇", "🥈", "🥉"]
+    
+#     for i, match in enumerate(results['Matches']):
+#         with st.container(border=True):
+#             st.subheader(f"{medals[i]} {match['Company']}")
+            
+#             # Row 1: Metrics
+#             c1, c2, c3 = st.columns(3)
+#             with c1:
+#                 st.metric("Similarity", f"{match['Similarity']*100:.1f}%")
+#             with c2:
+#                 st.metric("Status", match['Status'])
+#             with c3:
+#                 st.metric("Multiple", match['Multiple'])
+            
+#             st.divider()
+            
+#             # Row 2: Attribution
+#             c4, c5 = st.columns(2)
+#             with c4:
+#                 st.metric("Partner VC", match['Partner'])
+#             with c5:
+#                 st.metric("Isomer Fund", match['Fund'])
+
+# def display_match_cards(results):
+#     """Helper to display the Top 3 matches consistently across tabs."""
+#     if not results.get('Matches'):
+#         st.warning("No matches found.")
+#         return
+
+#     st.markdown("### 🎯 Top 3 Portfolio Matches")
+    
+#     medals = ["🥇", "🥈", "🥉"]
+    
+#     for i, match in enumerate(results['Matches']):
+#         with st.container(border=True):
+            
+#             # --- START OF NEW CODE ---
+#             # Header Row: We split this into 2 columns (Name on left, Link on right)
+#             col_head_1, col_head_2 = st.columns([3, 1])
+            
+#             with col_head_1:
+#                 # 1. The Company Name
+#                 st.subheader(f"{medals[i]} {match['Company']}")
+            
+#             with col_head_2:
+#                 # 2. The Website Link (The part that was missing)
+#                 url = match.get('Website')
+                
+#                 # Check if we actually have a website string
+#                 if url and isinstance(url, str) and len(url.strip()) > 0:
+#                     # Clean up the URL (add https if missing)
+#                     clean_url = url.strip()
+#                     if not clean_url.startswith('http'):
+#                         clean_url = f"https://{clean_url}"
+                    
+#                     # Display the link
+#                     st.markdown(f"[🌐 Visit Site]({clean_url})")
+#                 else:
+#                     st.caption("No website")
+#             # --- END OF NEW CODE ---
+
+#             # Row 1: Metrics (This is what you saw in your screenshot)
+#             c1, c2, c3 = st.columns(3)
+#             with c1:
+#                 st.metric("Similarity", f"{match['Similarity']*100:.1f}%")
+#             with c2:
+#                 st.metric("Status", match['Status'])
+#             with c3:
+#                 st.metric("Multiple", match['Multiple'])
+            
+#             st.divider()
+            
+#             # Row 2: Attribution
+#             c4, c5 = st.columns(2)
+#             with c4:
+#                 st.metric("Partner VC", match['Partner'])
+#             with c5:
+#                 st.metric("Isomer Fund", match['Fund'])
 
 def display_match_cards(results):
     """Helper to display the Top 3 matches consistently across tabs."""
@@ -228,8 +317,26 @@ def display_match_cards(results):
     
     for i, match in enumerate(results['Matches']):
         with st.container(border=True):
-            st.subheader(f"{medals[i]} {match['Company']}")
             
+            # --- NEW "ONE-LINER" LOGIC ---
+            # 1. Prepare the Website Link Variable
+            website_html = "" # Default is empty
+            url = match.get('Website')
+            
+            if url and isinstance(url, str) and len(url.strip()) > 0:
+                clean_url = url.strip()
+                if not clean_url.startswith('http'):
+                    clean_url = f"https://{clean_url}"
+                
+                # We create a small, clickable HTML link that sits right next to the name
+                # target='_blank' ensures it opens in a new tab
+                website_html = f"&nbsp; <a href='{clean_url}' target='_blank' style='font-size: 0.9rem; font-weight: normal; vertical-align: middle;'>🌐 Visit Site</a>"
+            
+            # 2. Display Name + Link together
+            # "###" makes the name big. The HTML link stays small next to it.
+            st.markdown(f"### {medals[i]} {match['Company']}{website_html}", unsafe_allow_html=True)
+            # -----------------------------
+
             # Row 1: Metrics
             c1, c2, c3 = st.columns(3)
             with c1:
@@ -327,51 +434,18 @@ with tab_single:
                     # Save the new research and vector to the Google Sheet
                     save_to_cache(s_company, res['Research'], query_vector)
 
-                # --- STEP 5: DISPLAY RESULTS (Your UI) ---
                 if res.get('error'):
                     st.error(res['error'])
                 else:
                     if not from_cache:
                         st.success("Analysis Complete")
                     
-                    st.markdown("### 🎯 Top 3 Portfolio Matches")
-                    
-                    # Icons for ranking
-                    medals = ["🥇", "🥈", "🥉"]
-                    
-                    # Loop through the top 3 matches
-                    for i, match in enumerate(res['Matches']):
-                        
-                        # Create a card for each match
-                        with st.container(border=True):
-                            # Header with Medal and Name
-                            st.subheader(f"{medals[i]} {match['Company']}")
-                            
-                            # Row 1: Metrics
-                            c1, c2, c3 = st.columns(3)
-                            with c1:
-                                st.metric("Similarity", f"{match['Similarity']*100:.1f}%")
-                            with c2:
-                                st.metric("Status", match['Status'])
-                            with c3:
-                                st.metric("Multiple", match['Multiple'])
-                            
-                            st.divider()
-                            
-                            # Row 2: Attribution
-                            c4, c5 = st.columns(2)
-                            with c4:
-                                st.metric("Partner VC", match['Partner'])
-                            with c5:
-                                st.metric("Isomer Fund", match['Fund'])
-                                
-                            # Expander for description (Uncomment if you want it back)
-                            # with st.expander(f"About {match['Company']}"):
-                            #     st.write(match['Description'])
+                    # USE THE HELPER FUNCTION (This activates your Website Link logic)
+                    display_match_cards(res)
 
                     # --- Research Section (At the bottom) ---
                     st.markdown("### 📝 AI Research Summary")
-                    st.markdown(res['Research'])                
+                    st.markdown(res['Research'])                            
 
 
 # --- TAB 2: CUSTOM DESCRIPTION (NEW) ---
