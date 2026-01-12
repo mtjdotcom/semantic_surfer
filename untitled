@@ -1,0 +1,210 @@
+
+
+# ------------------------------------------------------------
+# web_scraper.py – simple downloader + optional link finder
+# ------------------------------------------------------------
+import os
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+from pathlib import Path
+
+DOWNLOAD_DIR = Path("reports")
+DOWNLOAD_DIR.mkdir(exist_ok=True)
+
+
+def _guess_latest_pdf(url: str) -> str:
+    """Very naive “grab the first .pdf link on the page”.  
+    Override per‑fund if you need a smarter selector."""
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+    for a in soup.find_all("a", href=True):
+        if a["href"].lower().endswith(".pdf"):
+            return urljoin(url, a["href"])
+    raise RuntimeError(f"No PDF found on {url}")
+
+
+def download_report(fund_key: str, meta: dict) -> Path:
+    """
+    Returns the local path to the downloaded file.
+    If the URL already points to a PDF, we download it directly;
+    otherwise we try to guess the PDF link from the landing page.
+    """
+    dest = DOWNLOAD_DIR / f"{fund_key}.pdf"
+
+    # Already have it?  (skip re‑download unless you force refresh)
+    if dest.exists():
+        return dest
+
+    target_url = meta["url"]
+    if target_url.lower().endswith(".pdf"):
+        pdf_url = target_url
+    else:
+        pdf_url = _guess_latest_pdf(target_url)
+
+    r = requests.get(pdf_url, stream=True, timeout=30)
+    r.raise_for_status()
+    with open(dest, "wb") as f:
+        for chunk in r.iter_content(chunk_size=8192):
+            f.write(chunk)
+
+    return dest
+
+# ------------------------------------------------------------
+# pdf_extractor.py – one function per source_type
+# ------------------------------------------------------------
+import pdfplumber
+import camelot
+import pytesseract
+from PIL import Image
+import io
+import pandas as pd
+
+# ------------------------------------------------------------------
+# Helper: clean numeric strings (remove commas, convert to float)
+# ------------------------------------------------------------------
+def _num(val: str):
+    try:
+        return float(val.replace(",", "").replace("%", ""))
+    except Exception:
+        return None
+
+
+# ------------------------------------------------------------------
+# 1️⃣  Structured PDF / Excel (tier 1) – use Camelot or pdfplumber
+# ------------------------------------------------------------------
+def extract_pdf_text(path: str) -> pd.DataFrame:
+    """Try Camelot first (grid mode).  If it fails, fall back to pdfplumber."""
+    try:
+        tables = camelot.read_pdf(path, pages="all", flavor="stream")
+        df = pd.concat([t.df for t in tables], ignore_index=True)
+        return df
+    except Exception:
+        # pdfplumber fallback – grab all text lines and later split on whitespace
+        rows = []
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                txt = page.extract_text()
+                if txt:
+                    rows.extend(txt.splitlines())
+        return pd.DataFrame(rows, columns=["raw_line"])
+
+
+# ------------------------------------------------------------------
+# 2️⃣  Image‑only PDF (tier 2) – OCR via pytesseract
+# ------------------------------------------------------------------
+def extract_pdf_image(path: str) -> pd.DataFrame:
+    rows = []
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            im = page.to_image(resolution=300).original
+            txt = pytesseract.image_to_string(im)
+            rows.extend(txt.splitlines())
+    return pd.DataFrame(rows, columns=["raw_line"])
+
+
+# ------------------------------------------------------------------
+# 3️⃣  Excel files (if you ever encounter them)
+# ------------------------------------------------------------------
+def extract_excel(path: str) -> pd.DataFrame:
+    return pd.read_excel(path, sheet_name=None)  # returns dict of sheets
+
+
+# ------------------------------------------------------------------
+# 4️⃣  Generic “hunt for a heading and pull rows below it”
+# ------------------------------------------------------------------
+def pull_section(df: pd.DataFrame, heading: str) -> pd.DataFrame:
+    """
+    Works on either a raw‑line DataFrame (one column called 'raw_line')
+    or a proper table DataFrame.  Returns a clean table of manager rows.
+    """
+    if "raw_line" in df.columns:
+        # Text‑only mode – split each line into tokens
+        lines = df["raw_line"].tolist()
+    else:
+        # Assume the first column holds the raw concatenated text
+        lines = df.iloc[:, 0].astype(str).tolist()
+
+    # Locate the heading (case‑insensitive)
+    idx = next((i for i, l in enumerate(lines) if heading.lower() in l.lower()), None)
+    if idx is None:
+        raise RuntimeError(f"Heading '{heading}' not found")
+
+    # Grab everything until we hit a blank line or a new top‑level heading
+    data_lines = []
+    for l in lines[idx + 1 :]:
+        if not l.strip():               # stop on empty line
+            break
+        if l.isupper() and len(l.split()) <= 4:  # crude “new section” guard
+            break
+        data_lines.append(l.strip())
+
+    # Turn the raw strings into a DataFrame by splitting on whitespace
+    rows = []
+    for line in data_lines:
+        parts = line.split()
+        # Expect: Name (may be several words) + MarketValue + Allocation% + Perf
+        if len(parts) < 4:
+            continue
+        # The last three tokens are numeric; everything before is the name
+        name = " ".join(parts[:-3])
+        market, alloc, perf = parts[-3:]
+        rows.append(
+            {
+                "manager": name,
+                "market_value": _num(market),
+                "allocation_pct": _num(alloc),
+                "fytd_perf": perf,
+            }
+        )
+    return pd.DataFrame(rows)
+
+    # ------------------------------------------------------------
+# pipeline.py – one‑stop function that runs for a single fund
+# ------------------------------------------------------------
+import logging
+from pathlib import Path
+from web_scraper import download_report
+from pdf_extractor import (
+    extract_pdf_text,
+    extract_pdf_image,
+    extract_excel,
+    pull_section,
+)
+
+log = logging.getLogger(__name__)
+
+def run_for_fund(fund_key: str, meta: dict) -> Path:
+    """
+    Downloads the report, extracts the “Private Equity Composite” table,
+    writes a CSV named `<fund_key>_pe.csv` and returns the path.
+    """
+    try:
+        pdf_path = download_report(fund_key, meta)
+
+        # Choose extractor based on source_type
+        if meta["source_type"] == "excel":
+            df_raw = extract_excel(str(pdf_path))
+        elif meta["source_type"] == "pdf_text":
+            df_raw = extract_pdf_text(str(pdf_path))
+        elif meta["source_type"] == "pdf_image":
+            df_raw = extract_pdf_image(str(pdf_path))
+        else:
+            raise ValueError(f"Unsupported source_type: {meta['source_type']}")
+
+        # Pull the PE section (most reports use the same heading)
+        df_pe = pull_section(df_raw, heading="Private Equity Composite")
+
+        # Add provenance columns
+        df_pe["fund_key"] = fund_key
+        df_pe["fund_name"] = meta["name"]
+        df_pe["report_date"] = Path(pdf_path).stat().st_mtime  # crude timestamp
+
+        out_path = Path("reports") / f"{fund_key}_pe.csv"
+        df_pe.to_csv(out_path, index=False)
+        log.info(f"[{fund_key}] extracted {len(df_pe)} rows → {out_path}")
+        return out_path
+    except Exception as exc:
+        log.error(f"[{fund_key}] failed: {exc}")
+        raise
