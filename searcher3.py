@@ -257,9 +257,9 @@ def analyze_deal(company_name, company_url, portfolio_df, portfolio_vectors, pre
     # We always need to embed the profile text (whether cached or new) to do the math
     try:
         embed_response = client.models.embed_content(
-            model='text-embedding-004',
+            model='gemini-embedding-001',
             contents=profile_text,
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
+            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY", output_dimensionality=768)
         )
         new_vector = np.array(embed_response.embeddings[0].values).reshape(1, -1)
     except Exception as e:
@@ -416,9 +416,9 @@ with tab_single:
                 try:
                     # We embed the company name to see if it matches previous searches
                     q_resp = client.models.embed_content(
-                        model='text-embedding-004',
+                        model='gemini-embedding-001',
                         contents=s_company,
-                        config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
+                        config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY", output_dimensionality=768)
                     )
                     query_vector = np.array(q_resp.embeddings[0].values).reshape(1, -1)
                 except Exception as e:
@@ -536,9 +536,9 @@ with tab_bulk:
                     query_vector = None
                     try:
                         q_resp = client.models.embed_content(
-                            model='text-embedding-004',
+                            model='gemini-embedding-001',
                             contents=company_input,
-                            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
+                            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY", output_dimensionality=768)
                         )
                         query_vector = np.array(q_resp.embeddings[0].values).reshape(1, -1)
                     except Exception:

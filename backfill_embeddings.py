@@ -28,9 +28,9 @@ def batch_embed(texts, batch_size=50):
         try:
             # New SDK Batch Embedding
             response = client.models.embed_content(
-                model='text-embedding-004',
+                model='gemini-embedding-001',
                 contents=batch,
-                config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
+                config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT", output_dimensionality=768)
             )
             
             # Extract values
