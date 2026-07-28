@@ -5,3 +5,8 @@ scikit-learn
 numpy
 st-gsheets-connection
 google-auth-oauthlib
+# Imported directly by searcher3.py and backfill_embeddings.py. Both arrive
+# transitively today, via st-gsheets-connection and streamlit respectively,
+# but relying on that means a dependency bump elsewhere can break the build.
+gspread
+requests
