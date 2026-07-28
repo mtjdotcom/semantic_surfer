@@ -57,9 +57,16 @@ NAME_COLUMN = "Name"
 # model and keeps each cell around 8KB instead of 15KB (Sheets caps at 50k).
 ROUND_DP = 6
 
-# Rows per Sheets write request. Two ~8KB cells per row, so this keeps each
-# request comfortably small.
+# Rows per range. Two ~8KB cells per row, so this keeps any single range well
+# inside the request size limit.
 WRITE_CHUNK_ROWS = 100
+
+# Sheets allows 60 write requests per minute per user, so what matters is the
+# number of API calls, not the number of ranges. A scattered update produces
+# one range per changed row - those get packed into as few calls as the size
+# limits allow rather than sent individually.
+MAX_RANGES_PER_REQUEST = 100
+MAX_BYTES_PER_REQUEST = 1_500_000
 
 
 # --- SHEET HELPERS ---
@@ -242,6 +249,22 @@ def contiguous_runs(numbers):
     return runs
 
 
+def send_batch(worksheet, requests, retries=5):
+    """Sends one batch_update, backing off if we trip the write quota."""
+    delay = 10
+    for attempt in range(retries):
+        try:
+            worksheet.batch_update(requests, value_input_option="RAW")
+            return
+        except Exception as exc:
+            quota_hit = "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc)
+            if not quota_hit or attempt == retries - 1:
+                raise
+            print(f"  Sheets write quota reached; waiting {delay}s...")
+            time.sleep(delay)
+            delay *= 2
+
+
 def write_updates(worksheet, updates, embed_index, hash_index):
     """
     Writes only the Embedding and Embedding Hash cells for the given rows.
@@ -255,25 +278,38 @@ def write_updates(worksheet, updates, embed_index, hash_index):
     embed_col = embed_index + 1
     hash_col = hash_index + 1
 
+    # One range per contiguous run, split so no single range gets too large.
+    ranges = []
     for start, end in contiguous_runs(sorted(updates)):
         for chunk_start in range(start, end + 1, WRITE_CHUNK_ROWS):
             chunk_end = min(chunk_start + WRITE_CHUNK_ROWS - 1, end)
             rows = range(chunk_start, chunk_end + 1)
+            for col, item in ((embed_col, 0), (hash_col, 1)):
+                ranges.append({
+                    "range": f"{rowcol_to_a1(chunk_start, col)}:"
+                             f"{rowcol_to_a1(chunk_end, col)}",
+                    "values": [[updates[r][item]] for r in rows],
+                })
 
-            requests = [
-                {
-                    "range": f"{rowcol_to_a1(chunk_start, embed_col)}:"
-                             f"{rowcol_to_a1(chunk_end, embed_col)}",
-                    "values": [[updates[r][0]] for r in rows],
-                },
-                {
-                    "range": f"{rowcol_to_a1(chunk_start, hash_col)}:"
-                             f"{rowcol_to_a1(chunk_end, hash_col)}",
-                    "values": [[updates[r][1]] for r in rows],
-                },
-            ]
-            worksheet.batch_update(requests, value_input_option="RAW")
-            print(f"  Wrote rows {chunk_start}-{chunk_end}.")
+    # Pack those ranges into as few requests as the limits allow. Sending one
+    # request per range would blow the 60/minute write quota on any update
+    # touching more than a handful of scattered rows.
+    batch, batch_bytes, calls = [], 0, 0
+    for item in ranges:
+        size = sum(len(v[0]) for v in item["values"]) + 64
+        if batch and (len(batch) >= MAX_RANGES_PER_REQUEST
+                      or batch_bytes + size > MAX_BYTES_PER_REQUEST):
+            send_batch(worksheet, batch)
+            calls += 1
+            batch, batch_bytes = [], 0
+        batch.append(item)
+        batch_bytes += size
+
+    if batch:
+        send_batch(worksheet, batch)
+        calls += 1
+
+    print(f"  Saved {len(updates)} rows in {calls} request(s).")
 
 
 # --- PLANNING ---
@@ -429,9 +465,15 @@ def run(args):
         print("Nothing to do.")
         return
 
-    if args.limit and args.limit < len(work):
-        work = work[: args.limit]
-        print(f"--limit set: only processing the first {len(work)} rows.\n")
+    if args.limit:
+        # Applies to clears as well, otherwise a "small test run" would still
+        # rewrite every name-only row on the sheet.
+        if args.limit < len(work):
+            work = work[: args.limit]
+        if args.limit < len(clear):
+            clear = clear[: args.limit]
+        print(f"--limit set: processing at most {args.limit} rows "
+              f"({len(work)} to embed, {len(clear)} to clear).\n")
 
     if args.dry_run:
         print("Dry run - no API calls made, nothing written.")
