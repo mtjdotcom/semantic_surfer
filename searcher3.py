@@ -35,7 +35,18 @@ PORTFOLIO_NAME_COL = "Name"
 PORTFOLIO_DESC_COL = "New One Line Description"
 
 # --- AUTHENTICATION LOGIC (THE GATEKEEPER) ---
+ALLOWED_DOMAIN = "@isomercapital.com"
+
+
 def check_authentication():
+    """
+    Gate the app behind a Google sign-in restricted to ALLOWED_DOMAIN.
+
+    Every path out of here either returns True for an authenticated session or
+    ends in st.stop(). Returning False is not enough: the caller runs at module
+    level, so anything short of stopping lets the rest of the page render to
+    whoever triggered the failure.
+    """
     # 1. If already authenticated in this session, pass
     if st.session_state.get("auth_status") == "authenticated":
         return True
@@ -51,57 +62,65 @@ def check_authentication():
                 "redirect_uris": [st.secrets["oauth"]["redirect_uri"]],
             }
         }
-        
-        # Determine current URL to check for redirection code
-        # (Streamlit Cloud handles params differently than local)
-        auth_code = st.query_params.get("code")
-
         flow = Flow.from_client_config(
             client_config,
             scopes=["https://www.googleapis.com/auth/userinfo.email", "openid"],
             redirect_uri=st.secrets["oauth"]["redirect_uri"],
         )
+    except Exception as e:
+        # Misconfigured secrets - we cannot even offer a login, so stop dead
+        # rather than falling through to the app.
+        st.error(f"Sign-in is not configured correctly: {e}")
+        st.stop()
 
-        # 3. Handle the Return Trip (Exchange Code for Token)
-        if auth_code:
+    # 3. Handle the Return Trip (Exchange Code for Token)
+    email = ""
+    auth_code = st.query_params.get("code")
+
+    if auth_code:
+        try:
             flow.fetch_token(code=auth_code)
-            credentials = flow.credentials
-            
-            # Get User Email
             user_info = requests.get(
-                "https://www.googleapis.com/oauth2/v1/userinfo", 
-                headers={"Authorization": f"Bearer {credentials.token}"}
+                "https://www.googleapis.com/oauth2/v1/userinfo",
+                headers={"Authorization": f"Bearer {flow.credentials.token}"},
+                timeout=10,
             ).json()
-            
             email = user_info.get("email", "")
-            
-            # 4. THE DOMAIN CHECK
-            if email.endswith("@isomercapital.com"):
+        except Exception as e:
+            # An authorisation code can only be exchanged once. The usual cause
+            # is a page refresh or an app restart replaying a code that has
+            # already been used, which surfaces as 'invalid_grant'. Drop the
+            # stale code so the retry below starts a clean sign-in.
+            st.query_params.clear()
+            st.warning(f"Sign-in could not be completed: {e}")
+            st.caption("This usually means the sign-in link was already used. "
+                       "Please sign in again.")
+
+        # 4. THE DOMAIN CHECK
+        if email:
+            if email.endswith(ALLOWED_DOMAIN):
                 st.session_state["auth_status"] = "authenticated"
                 st.session_state["user_email"] = email
-                # Clear the code from URL so refreshing doesn't crash
-                st.query_params.clear() 
+                st.query_params.clear()
                 st.rerun()
             else:
-                st.error(f"Access Denied. {email} is not an Isomer Capital account.")
                 st.session_state["auth_status"] = "failed"
-                return False
+                st.query_params.clear()
+                st.error(f"Access Denied. {email} is not an Isomer Capital account.")
 
-    except Exception as e:
-        st.error(f"Authentication Error: {e}")
-        return False
-
-    # 5. Show Login Button (If not logged in)
+    # 5. Not authenticated. Offer sign-in and HALT - nothing below this runs.
     auth_url, _ = flow.authorization_url(prompt="consent")
-    
+
     st.title("🔒 Semantic Surfer Access")
     st.markdown("Please sign in with your **Isomer Capital** Google account.")
-    
+
     st.link_button("Sign in with Google", auth_url, type="primary")
-    st.stop() # HALT APP EXECUTION HERE
+    st.stop()
+
 
 # --- RUN THE CHECK IMMEDIATELY ---
-# If this fails or stops, the rest of the code below won't run.
+# check_authentication() either returns True or halts the script, so nothing
+# below runs for an unauthenticated visitor.
 check_authentication()
 
 # Display the logged-in user (Optional nice touch)
