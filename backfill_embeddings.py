@@ -354,6 +354,13 @@ def summarise(work, skipped, empty, name_only, total):
 
 # --- MAIN ---
 def run(args):
+    # Printed up front so it is always obvious which script and which model
+    # are actually running - a stale checkout is otherwise easy to miss.
+    print(f"backfill_embeddings.py | model={EMBED_MODEL} dims={EMBED_DIMS}")
+    if args.dry_run:
+        print("DRY RUN - no embeddings will be requested, nothing will be written.")
+    print("")
+
     worksheet = open_worksheet(args.worksheet)
     header, rows = read_sheet(worksheet)
     print(f"Loaded {len(rows)} rows x {len(header)} columns from '{worksheet.title}'.")
