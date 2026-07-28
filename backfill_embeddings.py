@@ -138,7 +138,7 @@ def ensure_column(worksheet, header, rows, name, dry_run=False):
 
 
 # --- TEXT + HASHING ---
-def build_text(row, lookup, text_columns):
+def build_text(row, lookup, text_columns, name_column):
     """
     Picks the best available text for a row.
 
@@ -153,8 +153,8 @@ def build_text(row, lookup, text_columns):
             if text:
                 return text, "description"
 
-    if NAME_COLUMN in lookup:
-        name = row[lookup[NAME_COLUMN]].strip()
+    if name_column in lookup:
+        name = row[lookup[name_column]].strip()
         if name:
             return name, "name"
 
@@ -275,19 +275,19 @@ def write_updates(worksheet, updates, embed_index, hash_index):
 
 
 # --- PLANNING ---
-def build_plan(rows, lookup, embed_index, hash_index, text_columns, force):
+def build_plan(rows, lookup, embed_index, hash_index, text_columns, force, name_column):
     """Decides what each row needs. Returns (work, skipped, empty, name_only)."""
     work, skipped, empty, name_only = [], 0, [], []
 
     for i, row in enumerate(rows):
         sheet_row = i + 2
-        text, quality = build_text(row, lookup, text_columns)
+        text, quality = build_text(row, lookup, text_columns, name_column)
 
         if quality == "none":
             empty.append(sheet_row)
             continue
         if quality == "name":
-            name_only.append(row[lookup[NAME_COLUMN]].strip())
+            name_only.append(row[lookup[name_column]].strip())
 
         digest = content_hash(text)
         has_vector = stored_vector_is_valid(row[embed_index])
@@ -378,8 +378,22 @@ def run(args):
             f"None of {text_columns} exist on the sheet. Columns are: {header}"
         )
 
+    # Without a name column, any row lacking a description is dropped entirely
+    # rather than falling back to its name - which can silently exclude a large
+    # chunk of the sheet. Make that loud, and show what is actually there.
+    name_column = args.name_column
+    if name_column not in lookup:
+        print("")
+        print(f"WARNING: name column '{name_column}' is not on this sheet, so rows")
+        print( "         with no description cannot fall back to their name and")
+        print( "         will be skipped. Columns found:")
+        for name in header:
+            if name.strip():
+                print(f"           {name}")
+        print("         Re-run with --name-column 'Your Column' if one of these is it.")
+
     work, skipped, empty, name_only = build_plan(
-        rows, lookup, embed_index, hash_index, text_columns, args.force
+        rows, lookup, embed_index, hash_index, text_columns, args.force, name_column
     )
     summarise(work, skipped, empty, name_only, len(rows))
 
@@ -457,6 +471,9 @@ def main():
     parser.add_argument("--text-columns", nargs="+",
                         help=f"Description columns, best first "
                              f"(default: {' '.join(DEFAULT_TEXT_COLUMNS)})")
+    parser.add_argument("--name-column", default=NAME_COLUMN,
+                        help=f"Column to fall back to when a row has no "
+                             f"description (default: {NAME_COLUMN})")
     args = parser.parse_args()
 
     if "GOOGLE_API_KEY" not in st.secrets:
