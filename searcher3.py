@@ -14,6 +14,19 @@ import requests
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Semantic Surfer", layout="wide")
 
+# --- MODELS ---
+# Research model. Safe to change on its own - it only affects the wording of
+# the AI summaries, not the stored portfolio vectors.
+RESEARCH_MODEL = "gemini-3.5-flash-lite"
+
+# Embedding model. These MUST stay in step with backfill_embeddings.py.
+# Queries are compared against the vectors stored in the sheet, and vectors
+# from two different models are not comparable - the maths still runs, it just
+# returns meaningless similarities. If you change either value, re-run
+# backfill_embeddings.py to rebuild the whole sheet before trusting results.
+EMBED_MODEL = "gemini-embedding-001"
+EMBED_DIMS = 768
+
 # --- AUTHENTICATION LOGIC (THE GATEKEEPER) ---
 def check_authentication():
     # 1. If already authenticated in this session, pass
@@ -242,7 +255,7 @@ def analyze_deal(company_name, company_url, portfolio_df, portfolio_vectors, pre
         try:
             google_search_tool = types.Tool(google_search=types.GoogleSearch())
             response = client.models.generate_content(
-                model='gemini-2.5-flash', 
+                model=RESEARCH_MODEL,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[google_search_tool],
@@ -257,9 +270,9 @@ def analyze_deal(company_name, company_url, portfolio_df, portfolio_vectors, pre
     # We always need to embed the profile text (whether cached or new) to do the math
     try:
         embed_response = client.models.embed_content(
-            model='gemini-embedding-001',
+            model=EMBED_MODEL,
             contents=profile_text,
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY", output_dimensionality=768)
+            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY", output_dimensionality=EMBED_DIMS)
         )
         new_vector = np.array(embed_response.embeddings[0].values).reshape(1, -1)
     except Exception as e:
@@ -416,9 +429,9 @@ with tab_single:
                 try:
                     # We embed the company name to see if it matches previous searches
                     q_resp = client.models.embed_content(
-                        model='gemini-embedding-001',
+                        model=EMBED_MODEL,
                         contents=s_company,
-                        config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY", output_dimensionality=768)
+                        config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY", output_dimensionality=EMBED_DIMS)
                     )
                     query_vector = np.array(q_resp.embeddings[0].values).reshape(1, -1)
                 except Exception as e:
@@ -536,9 +549,9 @@ with tab_bulk:
                     query_vector = None
                     try:
                         q_resp = client.models.embed_content(
-                            model='gemini-embedding-001',
+                            model=EMBED_MODEL,
                             contents=company_input,
-                            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY", output_dimensionality=768)
+                            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY", output_dimensionality=EMBED_DIMS)
                         )
                         query_vector = np.array(q_resp.embeddings[0].values).reshape(1, -1)
                     except Exception:

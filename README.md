@@ -6,7 +6,7 @@ An AI-powered portfolio search tool for Isomer Capital. This app uses **Semantic
 * **Semantic Search:** "Uber for Dogs" finds relevant marketplace companies.
 * **Bulk Analysis:** Upload a CSV to match hundreds of companies against the portfolio instantly.
 * **Smart Caching:** Remembers previous searches in Google Sheets to save AI costs and speed up results.
-* **Live Research:** Uses Gemini 2.0 + Google Search to research new companies on the fly.
+* **Live Research:** Uses Gemini 3.5 Flash-Lite + Google Search to research new companies on the fly.
 
 ## 🛠️ Tech Stack
 * **Frontend:** Streamlit
