@@ -67,6 +67,18 @@ def check_authentication():
             scopes=["https://www.googleapis.com/auth/userinfo.email", "openid"],
             redirect_uri=st.secrets["oauth"]["redirect_uri"],
         )
+
+        # Disable PKCE. The library generates a code_verifier while building
+        # the sign-in URL and needs the same value back when exchanging the
+        # code - but those happen in two different script runs, and the trip
+        # out to Google returns as a fresh page load with new session state.
+        # The verifier is therefore always gone by the time we exchange, and
+        # Google rejects it with 'invalid_grant: Missing code verifier'.
+        # This is a confidential client, so the client_secret already
+        # authenticates the exchange. Set on the instance rather than passed
+        # as a constructor argument so it holds across library versions.
+        flow.autogenerate_code_verifier = False
+        flow.code_verifier = None
     except Exception as e:
         # Misconfigured secrets - we cannot even offer a login, so stop dead
         # rather than falling through to the app.
