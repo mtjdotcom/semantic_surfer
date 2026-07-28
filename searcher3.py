@@ -27,6 +27,13 @@ RESEARCH_MODEL = "gemini-3.5-flash-lite"
 EMBED_MODEL = "gemini-embedding-001"
 EMBED_DIMS = 768
 
+# --- PORTFOLIO SHEET SCHEMA ---
+# Column headers on the 'portfolio' tab. Note these differ from the headers on
+# the 'cache' tab and from the CSV the Bulk tab expects, both of which use
+# 'Company Name' - don't unify them without checking all three.
+PORTFOLIO_NAME_COL = "Name"
+PORTFOLIO_DESC_COL = "New One Line Description"
+
 # --- AUTHENTICATION LOGIC (THE GATEKEEPER) ---
 def check_authentication():
     # 1. If already authenticated in this session, pass
@@ -292,7 +299,7 @@ def analyze_deal(company_name, company_url, portfolio_df, portfolio_vectors, pre
         numeric_idx = portfolio_df.index.get_loc(idx)
         
         # safely get name
-        p_name = str(row.get('Company Name', '')).lower().strip()
+        p_name = str(row.get(PORTFOLIO_NAME_COL, '')).lower().strip()
         
         # Rule A: Exact Match -> Max Score
         if search_clean == p_name and p_name != "":
@@ -310,15 +317,14 @@ def analyze_deal(company_name, company_url, portfolio_df, portfolio_vectors, pre
     for idx in top_indices:
         row = portfolio_df.iloc[idx]
         matches.append({
-            # Note: Switched back to 'Company Name' to match your sheet schema
-            "Company": row.get('Company Name', 'Unknown Company'),
+            "Company": row.get(PORTFOLIO_NAME_COL, 'Unknown Company'),
             "Similarity": scores[idx],
             "Status": row.get('Status', 'Unknown'),
             "Multiple": row.get('Multiple', '-'),
             "Partner": row.get('Partner VC - CList', 'N/A'),
             "Fund": row.get('Isomer Fund', 'N/A'),
             "Website": row.get('Website', ''),
-            "Description": row.get('Description', '')
+            "Description": row.get(PORTFOLIO_DESC_COL, '')
         })
 
     return {

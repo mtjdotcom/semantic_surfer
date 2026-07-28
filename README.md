@@ -53,9 +53,12 @@ Formatting, formulas and every other column are left untouched.
 
 ### Before you upload
 
-* Keep the header row exactly as-is. The script matches columns by name.
-* Put descriptions in `New Long Description` (it falls back to `Description`,
-  then to the company name).
+* Keep the header row exactly as-is. The script matches columns **by name, not
+  by position**, so reordering columns is fine but renaming one is not.
+* Put descriptions in `New Long Description`. If a row hasn't got one, the
+  script falls back to `New One Line Description`, then to `Name`.
+* A row with none of those three is skipped entirely and stays invisible to
+  search — the dry run lists them.
 * Add new companies as **new rows**. Don't reorder existing rows mid-update.
 * Don't hand-edit the `Embedding` or `Embedding Hash` columns.
 

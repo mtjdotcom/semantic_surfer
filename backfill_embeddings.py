@@ -45,11 +45,13 @@ TASK_TYPE = "RETRIEVAL_DOCUMENT"
 EMBEDDING_COL = "Embedding"
 HASH_COL = "Embedding Hash"
 
-# Description columns, best first. We use the first one that has real text,
-# so a new Q1 row with only a short 'Description' still gets a usable vector
-# instead of being embedded as the word "Company".
-DEFAULT_TEXT_COLUMNS = ["New Long Description", "Description"]
-NAME_COLUMN = "Company Name"
+# Description columns, best first. We use the first one that has real text, so
+# a new Q1 row carrying only a one-liner still gets a usable vector instead of
+# being dropped. Override with --text-columns.
+DEFAULT_TEXT_COLUMNS = ["New Long Description", "New One Line Description"]
+
+# Last resort when a row has no description at all. Override with --name-column.
+NAME_COLUMN = "Name"
 
 # Floats are rounded before storage. 6dp is well below the noise floor of the
 # model and keeps each cell around 8KB instead of 15KB (Sheets caps at 50k).
