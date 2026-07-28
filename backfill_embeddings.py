@@ -277,9 +277,17 @@ def write_updates(worksheet, updates, embed_index, hash_index):
 
 
 # --- PLANNING ---
-def build_plan(rows, lookup, embed_index, hash_index, text_columns, force, name_column):
-    """Decides what each row needs. Returns (work, skipped, empty, name_only)."""
-    work, skipped, empty, name_only = [], 0, [], []
+def build_plan(rows, lookup, embed_index, hash_index, text_columns, force,
+               name_column, require_description=False):
+    """
+    Decides what each row needs.
+
+    Returns (work, skipped, empty, name_only, clear). `clear` holds rows whose
+    stored vector should be wiped - only used with require_description, where
+    a name-only row must not merely be left alone but actively removed from
+    the index, since the app treats any parseable vector as searchable.
+    """
+    work, skipped, empty, name_only, clear = [], 0, [], [], []
 
     for i, row in enumerate(rows):
         sheet_row = i + 2
@@ -288,8 +296,15 @@ def build_plan(rows, lookup, embed_index, hash_index, text_columns, force, name_
         if quality == "none":
             empty.append(sheet_row)
             continue
+
         if quality == "name":
             name_only.append(row[lookup[name_column]].strip())
+            if require_description:
+                # Drop any vector it already carries, otherwise it stays
+                # searchable on the strength of its name alone.
+                if stored_vector_is_valid(row[embed_index]) or row[hash_index].strip():
+                    clear.append(sheet_row)
+                continue
 
         digest = content_hash(text)
         has_vector = stored_vector_is_valid(row[embed_index])
@@ -309,16 +324,19 @@ def build_plan(rows, lookup, embed_index, hash_index, text_columns, force, name_
 
         work.append({"row": sheet_row, "text": text, "hash": digest, "reason": reason})
 
-    return work, skipped, empty, name_only
+    return work, skipped, empty, name_only, clear
 
 
-def summarise(work, skipped, empty, name_only, total):
+def summarise(work, skipped, empty, name_only, clear, total, require_description):
     print("")
     print("--- PLAN ---")
     print(f"Rows on sheet:      {total}")
     print(f"Already up to date: {skipped}")
     print(f"Unusable (no text): {len(empty)}")
     print(f"To embed:           {len(work)}")
+    if require_description:
+        print(f"Name-only, excluded: {len(name_only)} "
+              f"({len(clear)} with a stale vector to clear)")
 
     if work:
         counts = {}
@@ -341,9 +359,15 @@ def summarise(work, skipped, empty, name_only, total):
         more = f" (+{len(name_only) - 10} more)" if len(name_only) > 10 else ""
         print("")
         noun = "company has" if len(name_only) == 1 else "companies have"
-        print(f"NOTE: {len(name_only)} {noun} no description, so they are embedded")
-        print(f"      on their name alone and will match poorly by concept.")
-        print(f"      Worth writing descriptions for: {preview}{more}")
+        if require_description:
+            print(f"NOTE: {len(name_only)} {noun} no description and will be left OUT")
+            print(f"      of search entirely (--require-description).")
+        else:
+            print(f"NOTE: {len(name_only)} {noun} no description, so they are embedded")
+            print(f"      on their name alone and WILL still appear in search results,")
+            print(f"      matched on the name alone. Pass --require-description to")
+            print(f"      exclude them instead.")
+        print(f"      Affected: {preview}{more}")
 
     if empty:
         preview = ", ".join(str(r) for r in empty[:10])
@@ -394,12 +418,14 @@ def run(args):
                 print(f"           {name}")
         print("         Re-run with --name-column 'Your Column' if one of these is it.")
 
-    work, skipped, empty, name_only = build_plan(
-        rows, lookup, embed_index, hash_index, text_columns, args.force, name_column
+    work, skipped, empty, name_only, clear = build_plan(
+        rows, lookup, embed_index, hash_index, text_columns, args.force,
+        name_column, args.require_description
     )
-    summarise(work, skipped, empty, name_only, len(rows))
+    summarise(work, skipped, empty, name_only, clear, len(rows),
+              args.require_description)
 
-    if not work:
+    if not work and not clear:
         print("Nothing to do.")
         return
 
@@ -418,6 +444,17 @@ def run(args):
         if answer != "y":
             print("Aborted.")
             return
+
+    # Clearing needs no API call, so do it first and get those rows out of the
+    # index even if the embedding run later fails partway.
+    if clear:
+        print(f"Clearing stale vectors on {len(clear)} name-only rows...")
+        write_updates(worksheet, {r: ("", "") for r in clear},
+                      embed_index, hash_index)
+
+    if not work:
+        print("Nothing left to embed.")
+        return
 
     client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 
@@ -476,6 +513,10 @@ def main():
     parser.add_argument("--name-column", default=NAME_COLUMN,
                         help=f"Column to fall back to when a row has no "
                              f"description (default: {NAME_COLUMN})")
+    parser.add_argument("--require-description", action="store_true",
+                        help="Leave rows with no description out of search "
+                             "entirely, clearing any vector they already have, "
+                             "instead of embedding them on their name")
     args = parser.parse_args()
 
     if "GOOGLE_API_KEY" not in st.secrets:
