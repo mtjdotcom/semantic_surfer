@@ -36,8 +36,10 @@ PORTFOLIO_NAME_COL = "Name"
 PORTFOLIO_DESC_COL = "New One Line Description"
 
 # Tag columns offered as filters on the By Sector tab. Any that are missing
-# from the sheet are simply not shown.
-SECTOR_FILTER_COLS = ["Sector", "Granular Tag", "Technology Tag", "Business Model"]
+# from the sheet are simply not shown. 'Sector' is deliberately not offered -
+# it largely duplicates the tags below - but it still appears in the results
+# table for context.
+SECTOR_FILTER_COLS = ["Granular Tag", "Technology Tag", "Business Model"]
 
 # --- AUTHENTICATION LOGIC (THE GATEKEEPER) ---
 ALLOWED_DOMAIN = "@isomercapital.com"
@@ -662,7 +664,7 @@ with tab_sector:
                         out["Similarity"] = filtered["Similarity"].apply(
                             lambda x: f"{x*100:.1f}%")
                     for col in [PORTFOLIO_DESC_COL] + SECTOR_FILTER_COLS + [
-                            "Status", "Multiple", "Isomer Fund",
+                            "Sector", "Status", "Multiple", "Isomer Fund",
                             "Partner VC - CList"]:
                         if col in filtered.columns:
                             out[col] = filtered[col]
