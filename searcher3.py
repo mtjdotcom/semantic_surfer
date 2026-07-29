@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import json
+import re
 import gspread
 from google import genai
 from google.genai import types
@@ -33,6 +34,10 @@ EMBED_DIMS = 768
 # 'Company Name' - don't unify them without checking all three.
 PORTFOLIO_NAME_COL = "Name"
 PORTFOLIO_DESC_COL = "New One Line Description"
+
+# Tag columns offered as filters on the By Sector tab. Any that are missing
+# from the sheet are simply not shown.
+SECTOR_FILTER_COLS = ["Sector", "Granular Tag", "Technology Tag", "Business Model"]
 
 # --- AUTHENTICATION LOGIC (THE GATEKEEPER) ---
 ALLOWED_DOMAIN = "@isomercapital.com"
@@ -420,6 +425,30 @@ def display_match_cards(results):
             with c5:
                 st.metric("Isomer Fund", match['Fund'])
 
+def tag_tokens(cell):
+    """
+    Splits a tag cell into individual tags.
+
+    Cells may hold one value or several ("Fintech; Payments"), so we split on
+    common delimiters and compare whole tags, never substrings - selecting
+    'AI' must not match 'Retail'.
+    """
+    if not isinstance(cell, str):
+        return []
+    return [p.strip() for p in re.split(r"[;,/|]", cell) if p.strip()]
+
+
+def build_tag_vocabulary(df):
+    """Unique tags per filter column, for the multiselect options."""
+    vocab = {}
+    for col in SECTOR_FILTER_COLS:
+        if col in df.columns:
+            tags = {t for cell in df[col] for t in tag_tokens(cell)}
+            if tags:
+                vocab[col] = sorted(tags, key=str.lower)
+    return vocab
+
+
 # --- UI ---
 st.title("🏄🏄‍♀️ Semantic Surfer 🔍︎")
 st.caption("The semantic surfer will surf through the Isomer portfolio to find companies that are most similar to the company or companies you are researching. You can search one company at a time on the Single Screen tab. Move to the Custom Search tab to search by concept. Or use the bulk analysis tab to search through a CSV of names and URLs. An AI-generated summary is produced for each company searched (i.e., it's not free, but it's very cheap)")
@@ -446,8 +475,8 @@ with st.spinner("Loading Databases..."):
         df_cache = pd.DataFrame()
         cache_vectors = np.array([])
 
-# tab_single, tab_bulk = st.tabs(["🔎 Single Screen", "📂 Bulk Upload"])
-tab_single, tab_custom, tab_bulk = st.tabs(["🔎 Single Screen", "📝 Custom Search", "📂 Bulk Upload"])
+tab_single, tab_custom, tab_sector, tab_bulk = st.tabs(
+    ["🔎 Single Screen", "📝 Custom Search", "🏷️ By Sector", "📂 Bulk Upload"])
 
 # TAB 1: Single Search
 with tab_single:
@@ -557,7 +586,111 @@ with tab_custom:
                     st.success("Search Complete")
                     display_match_cards(res)
 
-# --- TAB 3: BULK UPLOAD ---
+# --- TAB 3: BY SECTOR ---
+with tab_sector:
+    st.header("Browse by Sector")
+    st.caption("Pick one or more tags to list every matching portfolio company - "
+               "this searches the sheet's own tags, so it is exact and free. "
+               "Optionally add a concept to rank the results by similarity.")
+
+    vocab = build_tag_vocabulary(df_portfolio)
+
+    if not vocab:
+        st.warning("None of the tag columns "
+                   f"({', '.join(SECTOR_FILTER_COLS)}) were found on the sheet.")
+    else:
+        selections = {}
+        for widget_col, col in zip(st.columns(len(vocab)), vocab):
+            with widget_col:
+                chosen = st.multiselect(col, vocab[col], key=f"sector_{col}")
+            if chosen:
+                selections[col] = set(chosen)
+
+        sector_concept = st.text_input(
+            "Rank by concept (optional)",
+            placeholder="e.g. applying LLMs to drug discovery",
+            help="Leave blank for an alphabetical list. Fill in to sort the "
+                 "filtered companies by semantic similarity (one AI call).")
+
+        if st.button("List Companies", type="primary"):
+            if not selections and not sector_concept.strip():
+                st.warning("Pick at least one tag, or enter a concept to rank by.")
+            else:
+                # Within a column, any selected tag matches (OR). Across
+                # columns, all filters must hold (AND).
+                mask = pd.Series(True, index=df_portfolio.index)
+                for col, wanted in selections.items():
+                    mask &= df_portfolio[col].apply(
+                        lambda cell, w=wanted: bool(w & set(tag_tokens(cell))))
+
+                filtered = df_portfolio[mask]
+
+                if filtered.empty:
+                    st.warning("No companies match that combination of tags. "
+                               "Try removing a filter.")
+                else:
+                    # Optional semantic ranking of the filtered set
+                    if sector_concept.strip():
+                        try:
+                            q_resp = client.models.embed_content(
+                                model=EMBED_MODEL,
+                                contents=sector_concept,
+                                config=types.EmbedContentConfig(
+                                    task_type="RETRIEVAL_QUERY",
+                                    output_dimensionality=EMBED_DIMS)
+                            )
+                            q_vec = np.array(q_resp.embeddings[0].values).reshape(1, -1)
+                            # portfolio_vectors rows align positionally with
+                            # df_portfolio rows, so a positional mask is safe
+                            sub_vectors = portfolio_vectors[mask.to_numpy()]
+                            sims = cosine_similarity(q_vec, sub_vectors)[0]
+                            filtered = filtered.assign(Similarity=sims)
+                            filtered = filtered.sort_values("Similarity", ascending=False)
+                        except Exception as e:
+                            st.warning(f"Ranking failed ({e}) - showing an "
+                                       "alphabetical list instead.")
+                            filtered = filtered.sort_values(PORTFOLIO_NAME_COL)
+                    else:
+                        filtered = filtered.sort_values(PORTFOLIO_NAME_COL)
+
+                    st.success(f"{len(filtered)} matching companies.")
+
+                    # Assemble the display table from whatever columns exist
+                    out = pd.DataFrame(index=filtered.index)
+                    out["Name"] = filtered[PORTFOLIO_NAME_COL]
+                    if "Similarity" in filtered.columns:
+                        out["Similarity"] = filtered["Similarity"].apply(
+                            lambda x: f"{x*100:.1f}%")
+                    for col in [PORTFOLIO_DESC_COL] + SECTOR_FILTER_COLS + [
+                            "Status", "Multiple", "Isomer Fund",
+                            "Partner VC - CList"]:
+                        if col in filtered.columns:
+                            out[col] = filtered[col]
+                    if "Website" in filtered.columns:
+                        out["Website"] = filtered["Website"].apply(
+                            lambda u: (u.strip() if str(u).strip().startswith("http")
+                                       else f"https://{str(u).strip()}")
+                            if isinstance(u, str) and str(u).strip() else "")
+
+                    st.dataframe(
+                        out,
+                        column_config={
+                            "Website": st.column_config.LinkColumn("Website"),
+                        },
+                        hide_index=True,
+                        width="stretch",
+                    )
+
+                    csv = out.to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        label="Download CSV",
+                        data=csv,
+                        file_name="isomer_sector_results.csv",
+                        mime="text/csv",
+                        type="primary",
+                    )
+
+# --- TAB 4: BULK UPLOAD ---
 with tab_bulk:
     st.header("📂 Bulk Analysis")
     st.caption("Upload a CSV with columns: 'Company Name' and 'URL'.")
