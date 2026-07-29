@@ -270,12 +270,13 @@ def check_semantic_cache(new_query_name, new_query_vector, cache_df, cache_vecto
         
     return None
 
-def analyze_deal(company_name, company_url, portfolio_df, portfolio_vectors, precomputed_research=None):
+def analyze_deal(company_name, company_url, portfolio_df, portfolio_vectors, precomputed_research=None, top_n=3):
     """
     Analyzes a deal using Hybrid Search (Vector + Keyword) and Caching.
-    
+
     Args:
         precomputed_research (str, optional): If provided (from Cache), we skip the Gemini API call.
+        top_n (int): How many portfolio matches to return (clamped to the portfolio size).
     """
     
     # --- PHASE 1: RESEARCH ---
@@ -341,8 +342,9 @@ def analyze_deal(company_name, company_url, portfolio_df, portfolio_vectors, pre
             scores[numeric_idx] = min(scores[numeric_idx] + 0.15, 0.99)
 
     # --- PHASE 4: RANKING ---
-    # Get indices of top 3 scores, sorted descending
-    top_indices = np.argsort(scores)[-3:][::-1]
+    # Get indices of the top N scores, sorted descending
+    top_n = max(1, min(int(top_n), len(scores)))
+    top_indices = np.argsort(scores)[-top_n:][::-1]
     
     matches = []
     for idx in top_indices:
@@ -367,16 +369,18 @@ def analyze_deal(company_name, company_url, portfolio_df, portfolio_vectors, pre
 
 
 def display_match_cards(results):
-    """Helper to display the Top 3 matches consistently across tabs."""
-    if not results.get('Matches'):
+    """Helper to display the top matches consistently across tabs."""
+    matches = results.get('Matches')
+    if not matches:
         st.warning("No matches found.")
         return
 
-    st.markdown("### 🎯 Top 3 Portfolio Matches")
-    
-    medals = ["🥇", "🥈", "🥉"]
-    
-    for i, match in enumerate(results['Matches']):
+    st.markdown(f"### 🎯 Top {len(matches)} Portfolio Matches")
+
+    # Medals for the podium, plain numbering from 4th place on
+    medals = ["🥇", "🥈", "🥉"] + [f"#{n}" for n in range(4, len(matches) + 1)]
+
+    for i, match in enumerate(matches):
         with st.container(border=True):
             
             # --- NEW "ONE-LINER" LOGIC ---
@@ -448,13 +452,16 @@ tab_single, tab_custom, tab_bulk = st.tabs(["🔎 Single Screen", "📝 Custom S
 # TAB 1: Single Search
 with tab_single:
     st.header("Search by Company")
-    st.caption("Add a company name and company URL below. Our semantic surfers will search to find the three most similar Isomer portfolio companies. ")
+    st.caption("Add a company name and company URL below. Our semantic surfers will search to find the most similar Isomer portfolio companies. ")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
         s_company = st.text_input("Company Name", placeholder="e.g. Stripe")
     with col2:
-        s_url = st.text_input("URL", placeholder="e.g. stripe.com")       
+        s_url = st.text_input("URL", placeholder="e.g. stripe.com")
+    with col3:
+        s_top_n = st.number_input("Results", min_value=1, max_value=25, value=3, step=1,
+                                  help="How many portfolio matches to show", key="single_top_n")
 
     if st.button("Search Isomer Portfolio", type="primary"):
         if not s_company:
@@ -491,7 +498,7 @@ with tab_single:
 
                 # --- STEP 3: RUN ANALYSIS ---
                 # We pass 'research_text' (if found) to skip the Gemini generation step
-                res = analyze_deal(s_company, s_url, df_portfolio, portfolio_vectors, precomputed_research=research_text)
+                res = analyze_deal(s_company, s_url, df_portfolio, portfolio_vectors, precomputed_research=research_text, top_n=s_top_n)
                 
                 # --- STEP 4: SAVE TO CACHE (If it was new) ---
                 if not from_cache and not res.get('error'):
@@ -518,10 +525,15 @@ with tab_custom:
     st.caption("Paste a pitch, a thesis, or a raw description to find similar existing companies in the portfolio.")
     
     # Simple inputs
-    custom_name = st.text_input("Project Label (Optional)", placeholder="e.g. 'Uber for Dogs'")
-    custom_desc = st.text_area("Description / Thesis", height=150, 
+    c_left, c_right = st.columns([4, 1])
+    with c_left:
+        custom_name = st.text_input("Project Label (Optional)", placeholder="e.g. 'Uber for Dogs'")
+    with c_right:
+        c_top_n = st.number_input("Results", min_value=1, max_value=25, value=3, step=1,
+                                  help="How many portfolio matches to show", key="custom_top_n")
+    custom_desc = st.text_area("Description / Thesis", height=150,
                               placeholder="A marketplace connecting pet owners with walkers on demand...")
-    
+
     if st.button("Find Matches", type="primary"):
         if not custom_desc:
             st.warning("Please enter a description.")
@@ -535,7 +547,8 @@ with tab_custom:
                     company_url="",
                     portfolio_df=df_portfolio,
                     portfolio_vectors=portfolio_vectors,
-                    precomputed_research=custom_desc # <--- MAGIC TRICK
+                    precomputed_research=custom_desc, # <--- MAGIC TRICK
+                    top_n=c_top_n
                 )
                 
                 if res.get('error'):
